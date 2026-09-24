@@ -6,6 +6,8 @@ build-oga16/
 bin/
 lib/
 out/
+ryzenai-tray.ini
+ryzenai-server.log
 
 # CMake
 CMakeCache.txt

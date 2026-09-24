@@ -217,6 +217,13 @@ target_compile_definitions(ryzenai-server PRIVATE
 
 # Windows-specific settings
 if(WIN32)
+    add_executable(ryzenai-tray WIN32 src/tray_main.cpp)
+    target_compile_definitions(ryzenai-tray PRIVATE UNICODE _UNICODE _WIN32_WINNT=0x0A00)
+    target_link_libraries(ryzenai-tray PRIVATE shell32 user32 winhttp)
+    if(MSVC)
+        target_compile_options(ryzenai-tray PRIVATE /W4)
+    endif()
+
     # Target Windows 10 or later (required for cpp-httplib v0.26.0)
     target_compile_definitions(ryzenai-server PRIVATE _WIN32_WINNT=0x0A00)
     target_link_libraries(ryzenai-server PRIVATE ws2_32 wbemuuid ole32 oleaut32 shell32)
@@ -322,6 +329,9 @@ endif()
 install(TARGETS ryzenai-server
     RUNTIME DESTINATION bin
 )
+if(WIN32)
+    install(TARGETS ryzenai-tray RUNTIME DESTINATION bin)
+endif()
 
 # Print build information
 message(STATUS "==========================================================")

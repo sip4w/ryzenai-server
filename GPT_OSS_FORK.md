@@ -106,6 +106,29 @@ Microsoft 0.16.0 release; all RyzenAI provider and ONNX Runtime DLLs remain
 from AMD 1.8.0. In a local 4K smoke test, both configurations loaded the
 model and returned the expected answer through the NPU.
 
+### Windows tray launcher
+
+The Windows build also produces `ryzenai-tray.exe`. Place it beside
+`ryzenai-server.exe` in the desired runtime directory, and create
+`ryzenai-tray.ini` there using `ryzenai-tray.ini.example` as a starting point.
+Set `model` to the full path of the model directory. Double-click the tray
+executable to start the server without a console window. It does not install
+itself in Windows startup.
+
+```powershell
+Copy-Item 'build-oga16\bin\Release\ryzenai-tray.exe' 'build-oga16\native-runtime'
+Copy-Item 'ryzenai-tray.ini.example' 'build-oga16\native-runtime\ryzenai-tray.ini'
+# Edit model in build-oga16\native-runtime\ryzenai-tray.ini.
+& 'build-oga16\native-runtime\ryzenai-tray.exe'
+```
+
+The tray menu provides Start, Stop, Open /health, Open log, and Exit. The
+server log is `ryzenai-server.log` beside the tray executable. Stop and Exit
+terminate only the child process launched by this tray instance; a server
+already using the configured port is shown as external and left untouched.
+Stop is immediate rather than a graceful inference shutdown. For automation,
+invoke the tray executable with `--start`, `--stop`, or `--quit`.
+
 ## Parser tests without the SDK
 
 ```bash

@@ -1,0 +1,7 @@
+[server]
+server=ryzenai-server.exe
+model=C:\path\to\model
+ctx_size=4096
+host=127.0.0.1
+port=8080
+ryzenai_version=1.8.0
