@@ -25,7 +25,7 @@ struct CompletionTimingData {
 
 class InferenceEngine {
 public:
-    InferenceEngine(const std::string& model_path);
+    InferenceEngine(const std::string& model_path, int context_size);
     ~InferenceEngine();
     
     // Synchronous completion
@@ -75,6 +75,7 @@ private:
     std::string ryzenai_version_;
     std::string chat_template_;
     int max_prompt_length_ = 2048;  // Default, overridden by rai_config.json
+    int context_size_ = 2048;
     
     // Default generation params from genai_config.json search section
     GenerationParams default_params_;

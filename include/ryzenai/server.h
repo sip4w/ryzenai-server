@@ -25,7 +25,8 @@ private:
     // Helper to create GenerationParams with hierarchy: user provided > search config > defaults
     GenerationParams createGenerationParams(int max_tokens, float temperature, float top_p, 
                                            int top_k, float repeat_penalty, 
-                                           const std::vector<std::string>& stop) const;
+                                           const std::vector<std::string>& stop,
+                                           std::optional<bool> do_sample = std::nullopt) const;
     std::string extractModelName(const std::string& model_path);
     
     // Route handlers

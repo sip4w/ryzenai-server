@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <optional>
 #include <json.hpp>
 
 namespace ryzenai {
@@ -33,6 +34,7 @@ struct CompletionRequest {
     int top_k = 40;
     float repeat_penalty = 1.1f;
     bool stream = false;
+    std::optional<bool> do_sample;
     bool echo = false;
     std::vector<std::string> stop;
     
@@ -49,6 +51,7 @@ struct ChatCompletionRequest {
     int top_k = 40;
     float repeat_penalty = 1.1f;
     bool stream = false;
+    std::optional<bool> do_sample;
     std::vector<std::string> stop;
     json tools;  // Tool definitions (OpenAI format)
     

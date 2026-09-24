@@ -43,6 +43,10 @@ CompletionRequest CompletionRequest::fromJSON(const json& j) {
     if (j.contains("stream")) {
         req.stream = j["stream"];
     }
+
+    if (j.contains("do_sample")) {
+        req.do_sample = j["do_sample"].get<bool>();
+    }
     
     if (j.contains("echo")) {
         req.echo = j["echo"];
@@ -107,6 +111,10 @@ ChatCompletionRequest ChatCompletionRequest::fromJSON(const json& j) {
     
     if (j.contains("stream")) {
         req.stream = j["stream"];
+    }
+
+    if (j.contains("do_sample")) {
+        req.do_sample = j["do_sample"].get<bool>();
     }
     
     if (j.contains("stop")) {

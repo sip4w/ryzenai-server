@@ -1,6 +1,8 @@
 # Build directories
 build/
 build-microsoft-oga/
+build-oga14/
+build-oga16/
 bin/
 lib/
 out/

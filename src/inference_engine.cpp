@@ -1,6 +1,7 @@
 #include "ryzenai/inference_engine.h"
 #include <ort_genai.h>
 #include <ort_genai_c.h>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -13,7 +14,11 @@ namespace ryzenai {
 
 namespace fs = std::filesystem;
 
-InferenceEngine::InferenceEngine(const std::string& model_path) {
+InferenceEngine::InferenceEngine(const std::string& model_path, int context_size)
+    : context_size_(context_size) {
+    if (context_size_ < 2) {
+        throw std::invalid_argument("Context size must be at least 2 tokens");
+    }
     
     std::cout << "[InferenceEngine] Initializing with model: " << model_path << std::endl;
     
@@ -34,6 +39,7 @@ InferenceEngine::InferenceEngine(const std::string& model_path) {
     
     // Detect Ryzen AI version and load config
     loadRaiConfig();
+    max_prompt_length_ = std::min(max_prompt_length_, context_size_ - 1);
     
     // Setup execution provider
     setupExecutionProvider();
@@ -88,7 +94,8 @@ InferenceEngine::InferenceEngine(const std::string& model_path) {
     }
     
     std::cout << "[InferenceEngine] Model loaded successfully: " << model_name_ << std::endl;
-    std::cout << "[InferenceEngine] Max prompt length: " << max_prompt_length_ << " tokens" << std::endl;
+    std::cout << "[InferenceEngine] Max prompt length: " << max_prompt_length_ << " tokens"
+              << " (context size: " << context_size_ << ")" << std::endl;
 }
 
 InferenceEngine::~InferenceEngine() {
@@ -256,7 +263,7 @@ std::string InferenceEngine::detectRyzenAIVersion() {
     const std::string ryzenai_base = "/opt/ryzenai/";
 #endif
 
-    for (const char* version : {"1.7.1", "1.7.0"}) {
+    for (const char* version : {"1.8.0", "1.7.1", "1.7.0"}) {
         if (fs::exists(ryzenai_base + version)) return version;
     }
 
@@ -325,6 +332,7 @@ std::string InferenceEngine::detectExecutionMode() {
 void InferenceEngine::loadRaiConfig() {
     // Detect Ryzen AI version
     ryzenai_version_ = detectRyzenAIVersion();
+    max_prompt_length_ = context_size_ - 1;
     std::cout << "[InferenceEngine] Ryzen AI version: " << ryzenai_version_ << std::endl;
     
     // Load rai_config.json if it exists
@@ -451,7 +459,7 @@ std::string InferenceEngine::complete(const std::string& prompt, const Generatio
         auto gen_params = OgaGeneratorParams::Create(*model_);
         // max_length should be prompt_length + max_new_tokens
         // params.max_length is max_new_tokens from the caller
-        gen_params->SetSearchOption("max_length", static_cast<int>(input_ids.size()) + params.max_length);
+        gen_params->SetSearchOption("max_length", std::min(context_size_, static_cast<int>(input_ids.size()) + params.max_length));
         gen_params->SetSearchOption("temperature", params.temperature);
         gen_params->SetSearchOption("top_p", params.top_p);
         gen_params->SetSearchOption("top_k", static_cast<double>(params.top_k));
@@ -564,7 +572,7 @@ bool InferenceEngine::streamComplete(const std::string& prompt,
         auto gen_params = OgaGeneratorParams::Create(*model_);
         // max_length should be prompt_length + max_new_tokens
         // params.max_length is max_new_tokens from the caller
-        int total_max_length = static_cast<int>(input_ids.size()) + params.max_length;
+        int total_max_length = std::min(context_size_, static_cast<int>(input_ids.size()) + params.max_length);
         std::cout << "[InferenceEngine::streamComplete] prompt_length=" << input_ids.size() 
                   << ", max_new_tokens=" << params.max_length 
                   << ", total_max_length=" << total_max_length << std::endl;

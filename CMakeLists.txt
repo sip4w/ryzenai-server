@@ -24,6 +24,7 @@ endif()
 
 option(RYZENAI_MICROSOFT_OGA "Build with Microsoft ONNX Runtime GenAI instead of the AMD SDK" OFF)
 set(RYZENAI_RUNTIME_DIR "" CACHE PATH "Directory containing model-compatible Ryzen AI runtime DLLs")
+set(RYZENAI_OGA_VERSION "0.11.2" CACHE STRING "Microsoft ONNX Runtime GenAI build package version")
 if(RYZENAI_MICROSOFT_OGA AND NOT WIN32)
     message(FATAL_ERROR "RYZENAI_MICROSOFT_OGA is supported only on Windows")
 endif()
@@ -36,13 +37,25 @@ if(RYZENAI_MICROSOFT_OGA)
     if(NOT RYZENAI_RUNTIME_DIR)
         message(FATAL_ERROR "Set RYZENAI_RUNTIME_DIR to the model directory containing Ryzen AI runtime DLLs")
     endif()
-    set(OGA_VERSION "0.11.2")
-    set(OGA_PACKAGE "onnxruntime-genai-${OGA_VERSION}-win-x64-dml")
+    if(RYZENAI_OGA_VERSION STREQUAL "0.11.2")
+        set(OGA_SHA256 "69b869a45519a449f3caf1cdb8ffe5e8368016bb746ae4addf8c8887cc4d5134")
+        set(OGA_PACKAGE_SUFFIX "-dml")
+    elseif(RYZENAI_OGA_VERSION STREQUAL "0.14.0")
+        set(OGA_SHA256 "3ad50e0b978e9095909dadd4c8fcc7c2431f0d3be035ea2c7d142b71b403ea99")
+        set(OGA_PACKAGE_SUFFIX "-dml")
+    elseif(RYZENAI_OGA_VERSION STREQUAL "0.16.0")
+        set(OGA_SHA256 "270fd4663c53b88983df90d4eaac6370384a339040c2376a18d2492971fc217a")
+        set(OGA_PACKAGE_SUFFIX "")
+    else()
+        message(FATAL_ERROR "Unsupported RYZENAI_OGA_VERSION: ${RYZENAI_OGA_VERSION}")
+    endif()
+    set(OGA_VERSION "${RYZENAI_OGA_VERSION}")
+    set(OGA_PACKAGE "onnxruntime-genai-${OGA_VERSION}-win-x64${OGA_PACKAGE_SUFFIX}")
     set(OGA_ARCHIVE "${CMAKE_BINARY_DIR}/${OGA_PACKAGE}.zip")
     file(DOWNLOAD
         "https://github.com/microsoft/onnxruntime-genai/releases/download/v${OGA_VERSION}/${OGA_PACKAGE}.zip"
         "${OGA_ARCHIVE}"
-        EXPECTED_HASH SHA256=69b869a45519a449f3caf1cdb8ffe5e8368016bb746ae4addf8c8887cc4d5134
+        EXPECTED_HASH SHA256=${OGA_SHA256}
         TLS_VERIFY ON
         STATUS OGA_DOWNLOAD_STATUS
     )
