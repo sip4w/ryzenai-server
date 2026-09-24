@@ -22,12 +22,48 @@ if(RYZENAI_REASONING_TESTS_ONLY)
     return()
 endif()
 
+option(RYZENAI_MICROSOFT_OGA "Build with Microsoft ONNX Runtime GenAI instead of the AMD SDK" OFF)
+set(RYZENAI_RUNTIME_DIR "" CACHE PATH "Directory containing model-compatible Ryzen AI runtime DLLs")
+if(RYZENAI_MICROSOFT_OGA AND NOT WIN32)
+    message(FATAL_ERROR "RYZENAI_MICROSOFT_OGA is supported only on Windows")
+endif()
+
 # Find dependencies
 find_package(Threads REQUIRED)
 
 # ONNX Runtime GenAI
-# Priority order: RYZENAI_INSTALL_PATH env var > -DOGA_ROOT > platform default
-if(DEFINED ENV{RYZENAI_INSTALL_PATH})
+if(RYZENAI_MICROSOFT_OGA)
+    if(NOT RYZENAI_RUNTIME_DIR)
+        message(FATAL_ERROR "Set RYZENAI_RUNTIME_DIR to the model directory containing Ryzen AI runtime DLLs")
+    endif()
+    set(OGA_VERSION "0.11.2")
+    set(OGA_PACKAGE "onnxruntime-genai-${OGA_VERSION}-win-x64-dml")
+    set(OGA_ARCHIVE "${CMAKE_BINARY_DIR}/${OGA_PACKAGE}.zip")
+    file(DOWNLOAD
+        "https://github.com/microsoft/onnxruntime-genai/releases/download/v${OGA_VERSION}/${OGA_PACKAGE}.zip"
+        "${OGA_ARCHIVE}"
+        EXPECTED_HASH SHA256=69b869a45519a449f3caf1cdb8ffe5e8368016bb746ae4addf8c8887cc4d5134
+        TLS_VERIFY ON
+        STATUS OGA_DOWNLOAD_STATUS
+    )
+    list(GET OGA_DOWNLOAD_STATUS 0 OGA_DOWNLOAD_CODE)
+    if(NOT OGA_DOWNLOAD_CODE EQUAL 0)
+        message(FATAL_ERROR "Failed to download Microsoft ONNX Runtime GenAI: ${OGA_DOWNLOAD_STATUS}")
+    endif()
+    set(OGA_EXTRACT_DIR "${CMAKE_BINARY_DIR}/microsoft-oga")
+    set(OGA_ROOT "${OGA_EXTRACT_DIR}/${OGA_PACKAGE}")
+    if(NOT EXISTS "${OGA_ROOT}/lib/onnxruntime-genai.lib")
+        file(ARCHIVE_EXTRACT INPUT "${OGA_ARCHIVE}" DESTINATION "${OGA_EXTRACT_DIR}")
+    endif()
+    set(OGA_INCLUDE "${OGA_ROOT}/include")
+    set(OGA_LIB "${OGA_ROOT}/lib/onnxruntime-genai.lib")
+    foreach(REQUIRED_FILE "${OGA_INCLUDE}/ort_genai.h" "${OGA_INCLUDE}/ort_genai_c.h" "${OGA_LIB}")
+        if(NOT EXISTS "${REQUIRED_FILE}")
+            message(FATAL_ERROR "Microsoft ONNX Runtime GenAI archive is missing ${REQUIRED_FILE}")
+        endif()
+    endforeach()
+elseif(DEFINED ENV{RYZENAI_INSTALL_PATH})
+    # Priority order for SDK builds: environment > -DOGA_ROOT > platform default.
     set(OGA_ROOT_DEFAULT "$ENV{RYZENAI_INSTALL_PATH}")
     message(STATUS "Using RYZENAI_INSTALL_PATH from environment: ${OGA_ROOT_DEFAULT}")
     # Warn if both env var and explicit -DOGA_ROOT are set
@@ -52,7 +88,7 @@ elseif(UNIX AND NOT APPLE)
     set(OGA_ROOT "${OGA_ROOT_DEFAULT}" CACHE PATH "Path to Ryzen AI installation")
 endif()
 
-if(NOT EXISTS ${OGA_ROOT})
+if(NOT EXISTS "${OGA_ROOT}")
     message(FATAL_ERROR "Ryzen AI not found at ${OGA_ROOT}. Install a compatible SDK or set OGA_ROOT")
 endif()
 
@@ -61,7 +97,9 @@ message(STATUS "Using Ryzen AI from: ${OGA_ROOT}")
 # Find ONNX Runtime GenAI library
 # - Windows installer: ${OGA_ROOT}/LLM/{lib,include}
 # - Linux installer:   ${OGA_ROOT}/deployment/lib (no headers shipped)
-if(WIN32)
+if(RYZENAI_MICROSOFT_OGA)
+    # Headers and import library were validated above.
+elseif(WIN32)
     find_library(OGA_LIB
         NAMES onnxruntime-genai
         PATHS ${OGA_ROOT}/LLM/lib
@@ -170,8 +208,17 @@ if(WIN32)
     target_compile_definitions(ryzenai-server PRIVATE _WIN32_WINNT=0x0A00)
     target_link_libraries(ryzenai-server PRIVATE ws2_32 wbemuuid ole32 oleaut32 shell32)
     
-    # Copy required DLLs to output directory (they're in deployment folder)
-    set(REQUIRED_DLLS
+    # Microsoft supplies build files only; the model supplies its compatible runtime.
+    if(RYZENAI_MICROSOFT_OGA)
+        foreach(RUNTIME_DLL onnxruntime-genai.dll onnxruntime.dll onnxruntime_providers_ryzenai.dll)
+            if(NOT EXISTS "${RYZENAI_RUNTIME_DIR}/${RUNTIME_DLL}")
+                message(FATAL_ERROR "Missing required runtime DLL: ${RYZENAI_RUNTIME_DIR}/${RUNTIME_DLL}")
+            endif()
+        endforeach()
+        file(GLOB REQUIRED_DLLS "${RYZENAI_RUNTIME_DIR}/*.dll")
+    else()
+        # SDK deployment DLLs are the default for existing builds.
+        set(REQUIRED_DLLS
         "${OGA_ROOT}/deployment/onnxruntime-genai.dll"
         "${OGA_ROOT}/deployment/onnxruntime.dll"
         "${OGA_ROOT}/deployment/onnxruntime_providers_shared.dll"
@@ -190,7 +237,8 @@ if(WIN32)
         "${OGA_ROOT}/deployment/ryzenai_onnx_utils.dll"
         "${OGA_ROOT}/deployment/ryzen_mm.dll"
         "${OGA_ROOT}/deployment/aiecompiler_client.dll"
-    )
+        )
+    endif()
     
     # Set console subsystem explicitly
     set_target_properties(ryzenai-server PROPERTIES
@@ -198,10 +246,10 @@ if(WIN32)
     )
     
     foreach(DLL ${REQUIRED_DLLS})
-        if(EXISTS ${DLL})
+        if(EXISTS "${DLL}")
             add_custom_command(TARGET ryzenai-server POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${DLL}
+                "${DLL}"
                 $<TARGET_FILE_DIR:ryzenai-server>
                 COMMENT "Copying ${DLL}"
             )
@@ -266,7 +314,10 @@ install(TARGETS ryzenai-server
 message(STATUS "==========================================================")
 message(STATUS "Ryzen AI LLM Server Configuration:")
 message(STATUS "  Build type:        ${CMAKE_BUILD_TYPE}")
-message(STATUS "  Ryzen AI path:     ${OGA_ROOT}")
+message(STATUS "  ONNX GenAI path:   ${OGA_ROOT}")
+if(RYZENAI_MICROSOFT_OGA)
+    message(STATUS "  Runtime DLL path:  ${RYZENAI_RUNTIME_DIR}")
+endif()
 message(STATUS "  Output directory:  ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 message(STATUS "==========================================================")
 

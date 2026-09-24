@@ -6,10 +6,9 @@ streaming chat completions. It leaves the model directory outside Git.
 
 ## Build on Windows
 
-Install the Ryzen AI 1.7.1 **SDK** (headers, `onnxruntime-genai.lib`, and
-deployment DLLs), Visual Studio 2022 C++ tools, and CMake. The model folder's
-DLLs alone are not a build SDK. Use the SDK version matching the model's
-16-input `QMoEBf` graph; the published server 1.7.0 DLLs are incompatible.
+Install Visual Studio 2022 C++ tools and CMake. For the standard build, also
+install the Ryzen AI 1.7.1 SDK. Use runtime DLLs matching the model's 16-input
+`QMoEBf` graph; the published server 1.7.0 DLLs are incompatible.
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DOGA_ROOT="C:/Program Files/RyzenAI/1.7.1"
@@ -21,6 +20,28 @@ Keep the model's MoE configuration in its existing `genai_config.json`.
 The server reads that configuration through ONNX Runtime GenAI; this fork
 does not modify weights or select experts itself. Do not mix 1.7.0 and 1.7.1
 runtime DLLs in the executable directory.
+
+### Build without the AMD SDK
+
+The `RYZENAI_MICROSOFT_OGA` option downloads the official Microsoft ONNX
+Runtime GenAI 0.11.2 Windows x64 DML archive and verifies its SHA-256. Only
+its headers and `onnxruntime-genai.lib` are used for compilation. The AMD
+runtime DLLs are still required at run time; point `RYZENAI_RUNTIME_DIR` to
+the local model directory that already contains them. CMake copies those DLLs
+next to the executable, but does not copy model weights. Neither DLLs nor
+weights are committed to Git.
+
+```powershell
+cmake -S . -B build-microsoft-oga -G "Visual Studio 17 2022" -A x64 `
+  -DRYZENAI_MICROSOFT_OGA=ON `
+  -DRYZENAI_RUNTIME_DIR="C:/path/to/amd-gpt-oss-20b-onnx-ryzenai-npu"
+cmake --build build-microsoft-oga --config Release
+& .\build-microsoft-oga\bin\Release\ryzenai-server.exe -m "C:\path\to\amd-gpt-oss-20b-onnx-ryzenai-npu"
+```
+
+Do not replace the model's `onnxruntime-genai.dll` with the DML DLL from the
+Microsoft archive. This option removes the SDK requirement for building;
+it does not replace AMD's Windows NPU runtime or driver.
 
 ## Parser tests without the SDK
 
