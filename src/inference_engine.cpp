@@ -544,7 +544,7 @@ std::string InferenceEngine::complete(const std::string& prompt, const Generatio
     }
 }
 
-void InferenceEngine::streamComplete(const std::string& prompt, 
+bool InferenceEngine::streamComplete(const std::string& prompt, 
                                      const GenerationParams& params,
                                      StreamCallback callback) {
     std::lock_guard<std::mutex> lock(inference_mutex_);
@@ -589,6 +589,7 @@ void InferenceEngine::streamComplete(const std::string& prompt,
         auto tokenizer_stream = OgaTokenizerStream::Create(*tokenizer_);
         
         size_t token_count = 0;
+        size_t processed_count = generator->GetSequenceCount(0);
         std::string accumulated_output;  // Track full output for stop sequence detection
         bool client_disconnected = false;  // Track if client disconnected
         
@@ -598,7 +599,11 @@ void InferenceEngine::streamComplete(const std::string& prompt,
             // Get just the new token
             const int32_t* all_tokens = generator->GetSequenceData(0);
             size_t num_tokens = generator->GetSequenceCount(0);
+            if (num_tokens <= processed_count) {
+                continue;
+            }
             int32_t new_token = all_tokens[num_tokens - 1];
+            processed_count = num_tokens;
             
             // Decode incrementally using tokenizer stream (this works!)
             const char* decoded = tokenizer_stream->Decode(new_token);
@@ -641,6 +646,7 @@ void InferenceEngine::streamComplete(const std::string& prompt,
         }
         
         std::cout << "[InferenceEngine] Generated " << token_count << " tokens (streaming)" << std::endl;
+        return generator->GetSequenceCount(0) - input_ids.size() >= static_cast<size_t>(params.max_length);
         
     } catch (const std::exception& e) {
         throw std::runtime_error("Streaming inference failed: " + std::string(e.what()));

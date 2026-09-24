@@ -591,7 +591,7 @@ void RyzenAIServer::handleChatCompletions(const httplib::Request& req, httplib::
                         ReasoningStreamParser reasoning_parser(inference_engine_->usesGptOssTemplate());
                         
                         // Generate and send tokens in real-time
-                        inference_engine_->streamComplete(prompt, params, 
+                        bool reached_limit = inference_engine_->streamComplete(prompt, params, 
                             [&sink, model_id, &token_count, &full_response, &reasoning_parser, &first_token_received, &first_token_time](const std::string& token, bool is_final) -> bool {
                                 // Track time to first token
                                 if (!first_token_received && !token.empty()) {
@@ -650,13 +650,12 @@ void RyzenAIServer::handleChatCompletions(const httplib::Request& req, httplib::
                                 // Send regular content chunk if present
                                 if (!content_part.empty()) {
                                     std::string escaped_content = escapeJson(content_part);
-                                    std::string finish_reason = is_final ? "\"stop\"" : "null";
                                     std::string chunk_json = 
                                         "{\"id\":\"chatcmpl-" + std::to_string(std::time(nullptr)) + 
                                         "\",\"object\":\"chat.completion.chunk\",\"created\":" + std::to_string(std::time(nullptr)) + 
                                         ",\"model\":\"" + model_id + 
                                         "\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"" + escaped_content + 
-                                        "\"},\"finish_reason\":" + finish_reason + "}]}";
+                                        "\"},\"finish_reason\":null}]}";
                                     
                                     std::string chunk_str = "data: " + chunk_json + "\n\n";
                                     if (!sink.write(chunk_str.c_str(), chunk_str.size())) {
@@ -692,7 +691,7 @@ void RyzenAIServer::handleChatCompletions(const httplib::Request& req, httplib::
                                             "\",\"object\":\"chat.completion.chunk\",\"created\":" + std::to_string(std::time(nullptr)) + 
                                             ",\"model\":\"" + model_id + 
                                             "\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"" + escaped_content + 
-                                            "\"},\"finish_reason\":\"stop\"}]}";
+                                            "\"},\"finish_reason\":null}]}";
                                         
                                         std::string chunk_str = "data: " + chunk_json + "\n\n";
                                         if (!sink.write(chunk_str.c_str(), chunk_str.size())) {
@@ -758,7 +757,7 @@ void RyzenAIServer::handleChatCompletions(const httplib::Request& req, httplib::
                                 "\",\"object\":\"chat.completion.chunk\",\"created\":" + std::to_string(std::time(nullptr)) + 
                                 ",\"model\":\"" + model_id + 
                                 "\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"" + escaped_content + 
-                                "\"},\"finish_reason\":\"stop\"}]}";
+                                "\"},\"finish_reason\":null}]}";
                             
                             std::string chunk_str = "data: " + chunk_json + "\n\n";
                             sink.write(chunk_str.c_str(), chunk_str.size());
@@ -798,6 +797,14 @@ void RyzenAIServer::handleChatCompletions(const httplib::Request& req, httplib::
                             }
                         }
                         
+                        std::string finish_chunk =
+                            "data: {\"id\":\"chatcmpl-" + std::to_string(std::time(nullptr)) +
+                            "\",\"object\":\"chat.completion.chunk\",\"created\":" + std::to_string(std::time(nullptr)) +
+                            ",\"model\":\"" + model_id +
+                            "\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"" +
+                            (reached_limit ? "length" : "stop") + "\"}]}\n\n";
+                        sink.write(finish_chunk.c_str(), finish_chunk.size());
+
                         // Calculate timing metrics
                         auto end_time = std::chrono::high_resolution_clock::now();
                         auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);

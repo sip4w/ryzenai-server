@@ -32,8 +32,8 @@ public:
     // Returns generated text. If out_timing is provided, stores timing data.
     std::string complete(const std::string& prompt, const GenerationParams& params, CompletionTimingData* out_timing = nullptr);
     
-    // Streaming completion
-    void streamComplete(const std::string& prompt, 
+    // Streaming completion; returns true when generation exhausted max_new_tokens.
+    bool streamComplete(const std::string& prompt, 
                        const GenerationParams& params,
                        StreamCallback callback);
     
