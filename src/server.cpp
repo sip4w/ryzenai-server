@@ -588,7 +588,7 @@ void RyzenAIServer::handleChatCompletions(const httplib::Request& req, httplib::
                         std::string full_response;
                         
                         // Create reasoning parser for streaming
-                        ReasoningStreamParser reasoning_parser;
+                        ReasoningStreamParser reasoning_parser(inference_engine_->usesGptOssTemplate());
                         
                         // Generate and send tokens in real-time
                         inference_engine_->streamComplete(prompt, params, 
@@ -851,7 +851,7 @@ void RyzenAIServer::handleChatCompletions(const httplib::Request& req, httplib::
             std::string output = inference_engine_->complete(prompt, params, &timing);
             
             // Parse reasoning content from output
-            auto reasoning_result = parseReasoningContent(output);
+            auto reasoning_result = parseReasoningContent(output, inference_engine_->usesGptOssTemplate());
             std::string content = reasoning_result.regular_content;
             std::string reasoning_content = reasoning_result.reasoning_content;
             

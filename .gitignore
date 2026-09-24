@@ -25,9 +25,23 @@ external/
 *.o
 *.obj
 *.exe
+# AMD runtime binaries stay in the local SDK/model directory.
 *.dll
+*.lib
+*.pdb
 *.so
 *.dylib
+
+# Model files must never be committed to this fork.
+models/
+*.onnx
+*.onnx.data
+*.bin
+*.safetensors
+*.gguf
+*.pt
+*.pth
+*.ckpt
 
 # IDE
 .vscode/

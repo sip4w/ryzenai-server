@@ -16,12 +16,27 @@ struct ReasoningParseResult {
 // Parse reasoning content from model output
 // Extracts content between <think> and </think> tags
 // If only </think> is found (no opening tag), treats everything before it as reasoning
-ReasoningParseResult parseReasoningContent(const std::string& text);
+ReasoningParseResult parseReasoningContent(const std::string& text, bool gpt_oss = false);
+
+class GptOssStreamParser {
+public:
+    std::pair<std::string, std::string> processToken(const std::string& token);
+    std::pair<std::string, std::string> flush();
+    bool isThinking() const { return state_ == State::Analysis; }
+    void reset();
+
+private:
+    enum class State { Final, Analysis, Header, Channel, Other, Done };
+    State state_ = State::Final;
+    std::string buffer_;
+    std::string channel_;
+    std::pair<std::string, std::string> drain(bool final);
+};
 
 // For streaming: tracks state across multiple token callbacks
 class ReasoningStreamParser {
 public:
-    ReasoningStreamParser();
+    explicit ReasoningStreamParser(bool gpt_oss = false);
     
     // Process a single token
     // Returns: {reasoning_content, regular_content}
@@ -34,7 +49,7 @@ public:
     std::pair<std::string, std::string> flush();
     
     // Check if currently inside a <think> block
-    bool isThinking() const { return in_thinking_; }
+    bool isThinking() const { return gpt_oss_ ? gpt_parser_.isThinking() : in_thinking_; }
     
     // Get accumulated buffer (for detecting tags split across tokens)
     const std::string& getBuffer() const { return buffer_; }
@@ -44,6 +59,8 @@ public:
     
 private:
     bool in_thinking_;       // True if currently inside <think> tags
+    bool gpt_oss_;
+    GptOssStreamParser gpt_parser_;
     std::string buffer_;     // Buffer for detecting tags split across tokens
     
     // Check if buffer contains opening tag

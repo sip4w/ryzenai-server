@@ -45,6 +45,10 @@ public:
     std::string getExecutionMode() const { return execution_mode_; }
     int getMaxPromptLength() const { return max_prompt_length_; }
     std::string getRyzenAIVersion() const { return ryzenai_version_; }
+    bool usesGptOssTemplate() const {
+        return chat_template_.find("<|start|>") != std::string::npos &&
+               chat_template_.find("<|channel|>") != std::string::npos;
+    }
     
     // Get default generation params from genai_config.json (if available)
     GenerationParams getDefaultParams() const;
@@ -69,7 +73,7 @@ private:
     std::string model_name_;
     std::string execution_mode_;  // "npu", "hybrid", or "cpu"
     std::string ryzenai_version_;
-    std::string chat_template_;  // Chat template from tokenizer_config.json
+    std::string chat_template_;
     int max_prompt_length_ = 2048;  // Default, overridden by rai_config.json
     
     // Default generation params from genai_config.json search section

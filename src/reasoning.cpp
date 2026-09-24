@@ -1,9 +1,98 @@
 #include "ryzenai/reasoning.h"
 #include <iostream>
+#include <array>
+#include <algorithm>
 
 namespace ryzenai {
 
-ReasoningParseResult parseReasoningContent(const std::string& text) {
+void GptOssStreamParser::reset() {
+    state_ = State::Final;
+    buffer_.clear();
+    channel_.clear();
+}
+
+std::pair<std::string, std::string> GptOssStreamParser::processToken(const std::string& token) {
+    buffer_ += token;
+    return drain(false);
+}
+
+std::pair<std::string, std::string> GptOssStreamParser::flush() {
+    return drain(true);
+}
+
+std::pair<std::string, std::string> GptOssStreamParser::drain(bool final) {
+    static const std::array<std::string, 8> markers = {
+        "<|start|>", "<|channel|>", "<|message|>", "<|end|>",
+        "<|return|>", "<|fim_suffix|>", "<|endoftext|>", "<|im_end|>"
+    };
+    std::pair<std::string, std::string> output;
+
+    auto emit = [&](const std::string& part) {
+        if (state_ == State::Analysis) output.first += part;
+        else if (state_ == State::Final) output.second += part;
+        else if (state_ == State::Channel) channel_ += part;
+    };
+
+    while (!buffer_.empty() && state_ != State::Done) {
+        size_t next = std::string::npos;
+        const std::string* found = nullptr;
+        for (const auto& marker : markers) {
+            size_t pos = buffer_.find(marker);
+            if (pos != std::string::npos && (next == std::string::npos || pos < next)) {
+                next = pos;
+                found = &marker;
+            }
+        }
+
+        if (found) {
+            emit(buffer_.substr(0, next));
+            buffer_.erase(0, next + found->size());
+            if (*found == "<|channel|>") {
+                state_ = State::Channel;
+                channel_.clear();
+            } else if (*found == "<|message|>") {
+                state_ = state_ == State::Channel
+                    ? (channel_ == "analysis" ? State::Analysis
+                       : channel_ == "final" ? State::Final : State::Other)
+                    : State::Final;
+            } else if (*found == "<|start|>" || *found == "<|end|>" || *found == "<|im_end|>") {
+                state_ = State::Header;
+            } else {
+                state_ = State::Done;
+                buffer_.clear();
+            }
+            continue;
+        }
+
+        size_t hold = 0;
+        for (const auto& marker : markers) {
+            for (size_t n = 1; n < marker.size() && n <= buffer_.size(); ++n) {
+                if (buffer_.compare(buffer_.size() - n, n, marker, 0, n) == 0) {
+                    hold = std::max(hold, n);
+                }
+            }
+        }
+        emit(buffer_.substr(0, buffer_.size() - hold));
+        buffer_.erase(0, buffer_.size() - hold);
+        break;
+    }
+    if (state_ == State::Done || final) buffer_.clear();
+    return output;
+}
+
+ReasoningParseResult parseReasoningContent(const std::string& text, bool gpt_oss) {
+    if (gpt_oss) {
+        GptOssStreamParser parser;
+        auto first = parser.processToken(text);
+        bool is_thinking = parser.isThinking();
+        auto last = parser.flush();
+        ReasoningParseResult result;
+        result.reasoning_content = first.first + last.first;
+        result.regular_content = first.second + last.second;
+        result.has_reasoning = !result.reasoning_content.empty();
+        result.is_thinking = is_thinking;
+        return result;
+    }
     ReasoningParseResult result;
     result.has_reasoning = false;
     result.is_thinking = false;
@@ -50,13 +139,14 @@ ReasoningParseResult parseReasoningContent(const std::string& text) {
     return result;
 }
 
-ReasoningStreamParser::ReasoningStreamParser()
-    : in_thinking_(false) {
+ReasoningStreamParser::ReasoningStreamParser(bool gpt_oss)
+    : in_thinking_(false), gpt_oss_(gpt_oss) {
 }
 
 void ReasoningStreamParser::reset() {
     in_thinking_ = false;
     buffer_.clear();
+    gpt_parser_.reset();
 }
 
 bool ReasoningStreamParser::containsOpenTag(const std::string& text) const {
@@ -118,6 +208,7 @@ std::pair<std::string, std::string> ReasoningStreamParser::processTags() {
 }
 
 std::pair<std::string, std::string> ReasoningStreamParser::processToken(const std::string& token) {
+    if (gpt_oss_) return gpt_parser_.processToken(token);
     // Add token to buffer
     buffer_ += token;
     
@@ -134,6 +225,7 @@ std::pair<std::string, std::string> ReasoningStreamParser::processToken(const st
 }
 
 std::pair<std::string, std::string> ReasoningStreamParser::flush() {
+    if (gpt_oss_) return gpt_parser_.flush();
     // Flush any remaining buffer content
     // This should be called when generation is complete (is_final=true)
     if (buffer_.empty()) {

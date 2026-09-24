@@ -2,6 +2,8 @@
 
 A lightweight, OpenAI API-compatible server for running LLMs on AMD Ryzen AI NPUs using ONNX Runtime GenAI.
 
+For GPT-OSS on Ryzen AI 1.7.1, see [GPT_OSS_FORK.md](GPT_OSS_FORK.md).
+
 ## Overview
 
 This server enables running Large Language Models on AMD Ryzen AI 300-series processors with NPU acceleration. It implements the OpenAI API specification, making it compatible with existing LLM applications and tools.

@@ -249,15 +249,15 @@ std::string InferenceEngine::detectRyzenAIVersion() {
         }
     }
 
-    // Priority 3: Check platform-specific default paths
+    // Priority 3: Check platform-specific default paths, newest supported first
 #ifdef _WIN32
-    std::string ryzenai_path_17 = "C:/Program Files/RyzenAI/1.7.0";
+    const std::string ryzenai_base = "C:/Program Files/RyzenAI/";
 #else
-    std::string ryzenai_path_17 = "/opt/ryzenai/1.7.0";
+    const std::string ryzenai_base = "/opt/ryzenai/";
 #endif
 
-    if (fs::exists(ryzenai_path_17)) {
-        return "1.7.0";
+    for (const char* version : {"1.7.1", "1.7.0"}) {
+        if (fs::exists(ryzenai_base + version)) return version;
     }
 
     // Default fallback
@@ -371,18 +371,35 @@ void InferenceEngine::loadModel() {
         // Create tokenizer using factory method
         tokenizer_ = OgaTokenizer::Create(*model_);
         
-        // Load chat template from tokenizer_config.json
-        std::string tokenizer_config_path = model_path_ + "/tokenizer_config.json";
-        if (fs::exists(tokenizer_config_path)) {
+        // Load chat template - prefer chat_template.jinja file over tokenizer_config.json
+        // (matches the Python reference implementation in model_chat.py)
+        std::string jinja_path = model_path_ + "/chat_template.jinja";
+        if (fs::exists(jinja_path)) {
             try {
-                std::ifstream file(tokenizer_config_path);
-                json config = json::parse(file);
-                if (config.contains("chat_template") && config["chat_template"].is_string()) {
-                    chat_template_ = config["chat_template"];
-                    std::cout << "[InferenceEngine] Loaded chat template from tokenizer_config.json" << std::endl;
-                }
+                std::ifstream file(jinja_path);
+                std::ostringstream ss;
+                ss << file.rdbuf();
+                chat_template_ = ss.str();
+                std::cout << "[InferenceEngine] Loaded chat template from chat_template.jinja" << std::endl;
             } catch (const std::exception& e) {
-                std::cerr << "[WARNING] Failed to load chat template: " << e.what() << std::endl;
+                std::cerr << "[WARNING] Failed to load chat_template.jinja: " << e.what() << std::endl;
+            }
+        }
+
+        // Fall back to tokenizer_config.json if no jinja file found
+        if (chat_template_.empty()) {
+            std::string tokenizer_config_path = model_path_ + "/tokenizer_config.json";
+            if (fs::exists(tokenizer_config_path)) {
+                try {
+                    std::ifstream file(tokenizer_config_path);
+                    json config = json::parse(file);
+                    if (config.contains("chat_template") && config["chat_template"].is_string()) {
+                        chat_template_ = config["chat_template"];
+                        std::cout << "[InferenceEngine] Loaded chat template from tokenizer_config.json" << std::endl;
+                    }
+                } catch (const std::exception& e) {
+                    std::cerr << "[WARNING] Failed to load chat template: " << e.what() << std::endl;
+                }
             }
         }
         
