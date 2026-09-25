@@ -3,6 +3,7 @@ build/
 build-microsoft-oga/
 build-oga14/
 build-oga16/
+build-parser/
 bin/
 lib/
 out/
@@ -55,4 +56,5 @@ models/
 # OS
 .DS_Store
 Thumbs.db
+*.lnk
 

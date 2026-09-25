@@ -217,12 +217,9 @@ void RyzenAIServer::handleCompletions(const httplib::Request& req, httplib::Resp
             std::string prompt = comp_req.prompt;
             std::string model_id = model_id_;
             
-            // Count prompt tokens before streaming
-            int prompt_tokens = inference_engine_->countTokens(prompt);
-            
             res.set_chunked_content_provider(
                 "text/event-stream",
-                [this, prompt, params, model_id, prompt_tokens](size_t offset, httplib::DataSink& sink) {
+                [this, prompt, params, model_id](size_t offset, httplib::DataSink& sink) {
                     if (offset > 0) return false; // Only run once
                     
                     try {
@@ -231,12 +228,13 @@ void RyzenAIServer::handleCompletions(const httplib::Request& req, httplib::Resp
                         auto first_token_time = start_time;
                         bool first_token_received = false;
                         int token_count = 0;
+                        int prompt_tokens = 0;
                         
                         // Create reasoning parser for streaming
-                        ReasoningStreamParser reasoning_parser;
+                        ReasoningStreamParser reasoning_parser(inference_engine_->usesGptOssTemplate());
                         
                         // Generate and send tokens in real-time
-                        inference_engine_->streamComplete(prompt, params, 
+                        bool reached_limit = inference_engine_->streamComplete(prompt, params,
                             [&sink, model_id, &token_count, &reasoning_parser, &first_token_received, &first_token_time](const std::string& token, bool is_final) -> bool {
                                 // Track time to first token
                                 if (!first_token_received && !token.empty()) {
@@ -292,13 +290,12 @@ void RyzenAIServer::handleCompletions(const httplib::Request& req, httplib::Resp
                                 // Send regular content chunk if present
                                 if (!content_part.empty()) {
                                     std::string escaped_content = escapeJson(content_part);
-                                    std::string finish_reason = is_final ? "\"stop\"" : "null";
                                     std::string chunk_json = 
                                         "{\"id\":\"cmpl-" + std::to_string(std::time(nullptr)) + 
                                         "\",\"object\":\"text_completion.chunk\",\"created\":" + std::to_string(std::time(nullptr)) + 
                                         ",\"model\":\"" + model_id + 
                                         "\",\"choices\":[{\"index\":0,\"text\":\"" + escaped_content + 
-                                        "\",\"finish_reason\":" + finish_reason + "}]}";
+                                        "\",\"finish_reason\":null}]}";
                                     
                                     std::string chunk_str = "data: " + chunk_json + "\n\n";
                                     if (!sink.write(chunk_str.c_str(), chunk_str.size())) {
@@ -334,7 +331,7 @@ void RyzenAIServer::handleCompletions(const httplib::Request& req, httplib::Resp
                                             "\",\"object\":\"text_completion.chunk\",\"created\":" + std::to_string(std::time(nullptr)) + 
                                             ",\"model\":\"" + model_id + 
                                             "\",\"choices\":[{\"index\":0,\"text\":\"" + escaped_content + 
-                                            "\",\"finish_reason\":\"stop\"}]}";
+                                            "\",\"finish_reason\":null}]}";
                                         
                                         std::string chunk_str = "data: " + chunk_json + "\n\n";
                                         if (!sink.write(chunk_str.c_str(), chunk_str.size())) {
@@ -345,7 +342,7 @@ void RyzenAIServer::handleCompletions(const httplib::Request& req, httplib::Resp
                                 
                                 token_count++;
                                 return true; // Continue generation
-                            }
+                            }, &prompt_tokens
                         );
                         
                         // After generation completes, do a final flush to catch any remaining buffered content
@@ -399,12 +396,20 @@ void RyzenAIServer::handleCompletions(const httplib::Request& req, httplib::Resp
                                 "\",\"object\":\"text_completion.chunk\",\"created\":" + std::to_string(std::time(nullptr)) + 
                                 ",\"model\":\"" + model_id + 
                                 "\",\"choices\":[{\"index\":0,\"text\":\"" + escaped_content + 
-                                "\",\"finish_reason\":\"stop\"}]}";
+                                "\",\"finish_reason\":null}]}";
                             
                             std::string chunk_str = "data: " + chunk_json + "\n\n";
                             sink.write(chunk_str.c_str(), chunk_str.size());
                         }
-                        
+
+                        std::string finish_chunk =
+                            "data: {\"id\":\"cmpl-" + std::to_string(std::time(nullptr)) +
+                            "\",\"object\":\"text_completion.chunk\",\"created\":" + std::to_string(std::time(nullptr)) +
+                            ",\"model\":\"" + model_id +
+                            "\",\"choices\":[{\"index\":0,\"text\":\"\",\"finish_reason\":\"" +
+                            (reached_limit ? "length" : "stop") + "\"}]}\n\n";
+                        sink.write(finish_chunk.c_str(), finish_chunk.size());
+
                         // Calculate timing metrics
                         auto end_time = std::chrono::high_resolution_clock::now();
                         auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
@@ -458,7 +463,7 @@ void RyzenAIServer::handleCompletions(const httplib::Request& req, httplib::Resp
             std::string output = inference_engine_->complete(comp_req.prompt, params, &timing);
             
             // Parse reasoning content from output
-            auto reasoning_result = parseReasoningContent(output);
+            auto reasoning_result = parseReasoningContent(output, inference_engine_->usesGptOssTemplate());
             std::string content = reasoning_result.regular_content;
             std::string reasoning_content = reasoning_result.reasoning_content;
             
@@ -470,7 +475,7 @@ void RyzenAIServer::handleCompletions(const httplib::Request& req, httplib::Resp
             std::string final_text = comp_req.echo ? (comp_req.prompt + content) : content;
             
             // Count prompt tokens; completion_tokens from timing data
-            int prompt_tokens = inference_engine_->countTokens(comp_req.prompt);
+            int prompt_tokens = timing.prompt_token_count;
             int completion_tokens = timing.token_count;
             int total_tokens = prompt_tokens + completion_tokens;
             
@@ -478,7 +483,7 @@ void RyzenAIServer::handleCompletions(const httplib::Request& req, httplib::Resp
             json choice = {
                 {"index", 0},
                 {"text", final_text},
-                {"finish_reason", "stop"}
+                {"finish_reason", timing.reached_limit ? "length" : "stop"}
             };
             
             // Add reasoning_content if present
@@ -571,12 +576,9 @@ void RyzenAIServer::handleChatCompletions(const httplib::Request& req, httplib::
             std::string model_id = model_id_;
             bool has_tools = !chat_req.tools.empty();
             
-            // Count prompt tokens before streaming
-            int prompt_tokens = inference_engine_->countTokens(prompt);
-            
             res.set_chunked_content_provider(
                 "text/event-stream",
-                [this, prompt, params, model_id, has_tools, prompt_tokens](size_t offset, httplib::DataSink& sink) {
+                [this, prompt, params, model_id, has_tools](size_t offset, httplib::DataSink& sink) {
                     if (offset > 0) return false; // Only run once
                     
                     try {
@@ -585,6 +587,7 @@ void RyzenAIServer::handleChatCompletions(const httplib::Request& req, httplib::
                         auto first_token_time = start_time;
                         bool first_token_received = false;
                         int token_count = 0;
+                        int prompt_tokens = 0;
                         
                         // Accumulate full response for tool call extraction
                         std::string full_response;
@@ -593,7 +596,7 @@ void RyzenAIServer::handleChatCompletions(const httplib::Request& req, httplib::
                         ReasoningStreamParser reasoning_parser(inference_engine_->usesGptOssTemplate());
                         
                         // Generate and send tokens in real-time
-                        bool reached_limit = inference_engine_->streamComplete(prompt, params, 
+                        bool reached_limit = inference_engine_->streamComplete(prompt, params,
                             [&sink, model_id, &token_count, &full_response, &reasoning_parser, &first_token_received, &first_token_time](const std::string& token, bool is_final) -> bool {
                                 // Track time to first token
                                 if (!first_token_received && !token.empty()) {
@@ -652,7 +655,7 @@ void RyzenAIServer::handleChatCompletions(const httplib::Request& req, httplib::
                                 // Send regular content chunk if present
                                 if (!content_part.empty()) {
                                     std::string escaped_content = escapeJson(content_part);
-                                    std::string chunk_json = 
+                                    std::string chunk_json =
                                         "{\"id\":\"chatcmpl-" + std::to_string(std::time(nullptr)) + 
                                         "\",\"object\":\"chat.completion.chunk\",\"created\":" + std::to_string(std::time(nullptr)) + 
                                         ",\"model\":\"" + model_id + 
@@ -704,7 +707,7 @@ void RyzenAIServer::handleChatCompletions(const httplib::Request& req, httplib::
                                 
                                 token_count++;
                                 return true; // Continue generation
-                            }
+                            }, &prompt_tokens
                         );
                         
                         // After generation completes, do a final flush to catch any remaining buffered content
@@ -891,7 +894,7 @@ void RyzenAIServer::handleChatCompletions(const httplib::Request& req, httplib::
             }
             
             // Count prompt tokens; completion_tokens from timing data
-            int prompt_tokens = inference_engine_->countTokens(prompt);
+            int prompt_tokens = timing.prompt_token_count;
             int completion_tokens = timing.token_count;
             int total_tokens = prompt_tokens + completion_tokens;
             
@@ -918,7 +921,7 @@ void RyzenAIServer::handleChatCompletions(const httplib::Request& req, httplib::
                 {"choices", {{
                     {"index", 0},
                     {"message", message},
-                    {"finish_reason", "stop"}
+                    {"finish_reason", timing.reached_limit ? "length" : "stop"}
                 }}},
                 {"usage", {
                     {"prompt_tokens", prompt_tokens},
@@ -985,7 +988,8 @@ void RyzenAIServer::handleResponses(const httplib::Request& req, httplib::Respon
         // Handle input - can be string or array of messages
         std::string prompt;
         if (request_json["input"].is_string()) {
-            prompt = request_json["input"].get<std::string>();
+            json messages = json::array({{{"role", "user"}, {"content", request_json["input"]}}});
+            prompt = inference_engine_->applyChatTemplate(messages.dump());
         } else if (request_json["input"].is_array()) {
             // Apply chat template to messages array
             prompt = inference_engine_->applyChatTemplate(request_json["input"].dump());
@@ -1032,88 +1036,43 @@ void RyzenAIServer::handleResponses(const httplib::Request& req, httplib::Respon
                             return false;
                         }
                         
-                        // Accumulate full response for the completed event
+                        ReasoningStreamParser reasoning_parser(inference_engine_->usesGptOssTemplate());
                         std::string full_response;
-                        
+
                         // Generate and send tokens in real-time
-                        inference_engine_->streamComplete(prompt, params, 
-                            [&sink, &full_response](const std::string& token, bool is_final) -> bool {
-                                // Escape special characters for JSON
-                                std::string escaped_token = token;
-                                size_t pos = 0;
-                                while ((pos = escaped_token.find('\\', pos)) != std::string::npos) {
-                                    escaped_token.replace(pos, 1, "\\\\");
-                                    pos += 2;
-                                }
-                                pos = 0;
-                                while ((pos = escaped_token.find('"', pos)) != std::string::npos) {
-                                    escaped_token.replace(pos, 1, "\\\"");
-                                    pos += 2;
-                                }
-                                pos = 0;
-                                while ((pos = escaped_token.find('\n', pos)) != std::string::npos) {
-                                    escaped_token.replace(pos, 1, "\\n");
-                                    pos += 2;
-                                }
-                                pos = 0;
-                                while ((pos = escaped_token.find('\r', pos)) != std::string::npos) {
-                                    escaped_token.replace(pos, 1, "\\r");
-                                    pos += 2;
-                                }
-                                
-                                // Accumulate unescaped token for final response
-                                full_response += token;
-                                
-                                // Send response.output_text.delta event
-                                std::string delta_event = 
-                                    "data: {\"type\":\"response.output_text.delta\",\"sequence_number\":0,"
-                                    "\"content_index\":0,\"delta\":\"" + escaped_token + 
-                                    "\",\"item_id\":\"0\",\"output_index\":0}\n\n";
-                                
-                                if (!sink.write(delta_event.c_str(), delta_event.size())) {
-                                    std::cout << "[Server] Client disconnected during streaming" << std::endl;
-                                    return false; // Client disconnected, stop generation
-                                }
-                                return true; // Continue generation
+                        auto send_delta = [&sink, &full_response](const std::string& content) -> bool {
+                            if (content.empty()) return true;
+                            full_response += content;
+                            json event = {{"type", "response.output_text.delta"},
+                                          {"sequence_number", 0}, {"content_index", 0},
+                                          {"delta", content}, {"item_id", "0"}, {"output_index", 0}};
+                            std::string line = "data: " + event.dump() + "\n\n";
+                            return sink.write(line.c_str(), line.size());
+                        };
+                        bool reached_limit = inference_engine_->streamComplete(prompt, params,
+                            [&reasoning_parser, &send_delta](const std::string& token, bool) -> bool {
+                                auto parts = reasoning_parser.processToken(token);
+                                return send_delta(parts.second);
                             }
                         );
-                        
+                        if (!send_delta(reasoning_parser.flush().second)) return false;
+
                         std::cout << "[Server] Token generation completed, sending final events" << std::endl;
-                        
-                        // Escape full_response for JSON
-                        std::string escaped_full_response = full_response;
-                        size_t pos = 0;
-                        while ((pos = escaped_full_response.find('\\', pos)) != std::string::npos) {
-                            escaped_full_response.replace(pos, 1, "\\\\");
-                            pos += 2;
-                        }
-                        pos = 0;
-                        while ((pos = escaped_full_response.find('"', pos)) != std::string::npos) {
-                            escaped_full_response.replace(pos, 1, "\\\"");
-                            pos += 2;
-                        }
-                        pos = 0;
-                        while ((pos = escaped_full_response.find('\n', pos)) != std::string::npos) {
-                            escaped_full_response.replace(pos, 1, "\\n");
-                            pos += 2;
-                        }
-                        pos = 0;
-                        while ((pos = escaped_full_response.find('\r', pos)) != std::string::npos) {
-                            escaped_full_response.replace(pos, 1, "\\r");
-                            pos += 2;
-                        }
-                        
-                        // Send response.completed event
+
                         std::string completed_time = std::to_string(std::time(nullptr));
-                        std::string completed_event = 
-                            "data: {\"type\":\"response.completed\",\"sequence_number\":0,"
-                            "\"response\":{\"id\":\"0\",\"model\":\"" + model_name + 
-                            "\",\"created_at\":" + completed_time + 
-                            ",\"object\":\"response\",\"output\":[{\"id\":\"0\",\"content\":[{"
-                            "\"type\":\"output_text\",\"text\":\"" + escaped_full_response + 
-                            "\",\"annotations\":[]}],\"role\":\"assistant\",\"status\":\"completed\","
-                            "\"type\":\"message\"}],\"parallel_tool_calls\":true,"
-                            "\"tool_choice\":\"auto\",\"tools\":[]}}\n\n";
+                        json completed_response = {
+                            {"id", "0"}, {"model", model_name}, {"created_at", std::stoll(completed_time)},
+                            {"object", "response"}, {"status", reached_limit ? "incomplete" : "completed"},
+                            {"output", json::array({{{"id", "0"}, {"content", json::array({{
+                                {"type", "output_text"}, {"text", full_response}, {"annotations", json::array()}
+                            }})}, {"role", "assistant"}, {"status", reached_limit ? "incomplete" : "completed"},
+                                {"type", "message"}}})},
+                            {"parallel_tool_calls", true}, {"tool_choice", "auto"}, {"tools", json::array()}
+                        };
+                        if (reached_limit) completed_response["incomplete_details"] = {{"reason", "max_output_tokens"}};
+                        json completed_event_json = {{"type", reached_limit ? "response.incomplete" : "response.completed"},
+                                                     {"sequence_number", 0}, {"response", completed_response}};
+                        std::string completed_event = "data: " + completed_event_json.dump() + "\n\n";
                         
                         if (!sink.write(completed_event.c_str(), completed_event.size())) {
                             std::cout << "[Server] Failed to write completed event" << std::endl;
@@ -1126,7 +1085,8 @@ void RyzenAIServer::handleResponses(const httplib::Request& req, httplib::Respon
                             std::cout << "[Server] Failed to write [DONE] marker" << std::endl;
                             return false;
                         }
-                        
+                        sink.done();
+
                         std::cout << "[Server] Streaming responses completed successfully" << std::endl;
                         return true;
                         
@@ -1134,6 +1094,7 @@ void RyzenAIServer::handleResponses(const httplib::Request& req, httplib::Respon
                         std::cerr << "[Server] Error in streaming responses: " << e.what() << std::endl;
                         std::string error_msg = "data: {\"error\":\"" + std::string(e.what()) + "\"}\n\n";
                         sink.write(error_msg.c_str(), error_msg.size());
+                        sink.done();
                         return false;
                     }
                 }
@@ -1146,7 +1107,9 @@ void RyzenAIServer::handleResponses(const httplib::Request& req, httplib::Respon
                 top_k, repeat_penalty, {}
             );
             
-            std::string generated_text = inference_engine_->complete(prompt, params);
+            CompletionTimingData timing;
+            std::string generated_text = inference_engine_->complete(prompt, params, &timing);
+            auto parsed = parseReasoningContent(generated_text, inference_engine_->usesGptOssTemplate());
             
             // Create Response object
             json response = {
@@ -1160,19 +1123,24 @@ void RyzenAIServer::handleResponses(const httplib::Request& req, httplib::Respon
                         {"content", json::array({
                             {
                                 {"type", "output_text"},
-                                {"text", generated_text},
+                        {"text", parsed.regular_content},
                                 {"annotations", json::array()}
                             }
                         })},
                         {"role", "assistant"},
-                        {"status", "completed"},
+                        {"status", timing.reached_limit ? "incomplete" : "completed"},
                         {"type", "message"}
                     }
                 })},
                 {"parallel_tool_calls", true},
                 {"tool_choice", "auto"},
-                {"tools", json::array()}
+                {"tools", json::array()},
+                {"status", timing.reached_limit ? "incomplete" : "completed"},
+                {"usage", {{"input_tokens", timing.prompt_token_count},
+                           {"output_tokens", timing.token_count},
+                           {"total_tokens", timing.prompt_token_count + timing.token_count}}}
             };
+            if (timing.reached_limit) response["incomplete_details"] = {{"reason", "max_output_tokens"}};
             
             res.set_content(response.dump(), "application/json");
             std::cout << "[Server] Non-streaming responses completed" << std::endl;

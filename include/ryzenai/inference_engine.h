@@ -18,6 +18,8 @@ namespace ryzenai {
 // Timing data returned from completion
 struct CompletionTimingData {
     int token_count = 0;           // Number of generated tokens
+    int prompt_token_count = 0;    // Tokens actually sent after truncation
+    bool reached_limit = false;
     double ttft_seconds = 0.0;     // Time to first token in seconds
     double tps = 0.0;              // Tokens per second (decode speed)
     double total_time_ms = 0.0;    // Total completion time in milliseconds
@@ -33,9 +35,10 @@ public:
     std::string complete(const std::string& prompt, const GenerationParams& params, CompletionTimingData* out_timing = nullptr);
     
     // Streaming completion; returns true when generation exhausted max_new_tokens.
-    bool streamComplete(const std::string& prompt, 
+    bool streamComplete(const std::string& prompt,
                        const GenerationParams& params,
-                       StreamCallback callback);
+                       StreamCallback callback,
+                       int* out_prompt_tokens = nullptr);
     
     // Apply chat template to messages
     std::string applyChatTemplate(const std::string& messages_json, const std::string& tools_json = "");
@@ -63,7 +66,8 @@ private:
     std::string detectRyzenAIVersion();
     std::string detectExecutionMode();
     std::string resolveModelPath(const std::string& path);
-    std::vector<int32_t> truncatePrompt(const std::vector<int32_t>& input_ids);
+    std::vector<int32_t> truncatePrompt(const std::vector<int32_t>& input_ids,
+                                        int reserved_output_tokens);
     bool validateModelDirectory(const std::string& path);
     
     std::unique_ptr<OgaModel> model_;

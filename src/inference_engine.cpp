@@ -418,15 +418,17 @@ void InferenceEngine::loadModel() {
     }
 }
 
-std::vector<int32_t> InferenceEngine::truncatePrompt(const std::vector<int32_t>& input_ids) {
-    if (input_ids.size() <= static_cast<size_t>(max_prompt_length_)) {
+std::vector<int32_t> InferenceEngine::truncatePrompt(const std::vector<int32_t>& input_ids,
+                                                      int reserved_output_tokens) {
+    const int prompt_limit = std::min(max_prompt_length_, context_size_ - reserved_output_tokens);
+    if (input_ids.size() <= static_cast<size_t>(prompt_limit)) {
         return input_ids;
     }
     
     // Truncate from the beginning to keep the most recent context
-    size_t truncate_amount = input_ids.size() - max_prompt_length_;
+    size_t truncate_amount = input_ids.size() - prompt_limit;
     std::cout << "[WARNING] Prompt exceeds maximum length (" 
-              << input_ids.size() << " > " << max_prompt_length_ 
+              << input_ids.size() << " > " << prompt_limit
               << "). Truncating " << truncate_amount << " tokens from the beginning."
               << std::endl;
     
@@ -453,13 +455,13 @@ std::string InferenceEngine::complete(const std::string& prompt, const Generatio
         const int32_t* input_ids_ptr = sequences->SequenceData(0);
         size_t input_ids_count = sequences->SequenceCount(0);
         std::vector<int32_t> input_ids(input_ids_ptr, input_ids_ptr + input_ids_count);
-        input_ids = truncatePrompt(input_ids);
+        const int max_new_tokens = std::clamp(params.max_length, 1, context_size_ - 1);
+        input_ids = truncatePrompt(input_ids, max_new_tokens);
         
         // Create generator params
         auto gen_params = OgaGeneratorParams::Create(*model_);
-        // max_length should be prompt_length + max_new_tokens
-        // params.max_length is max_new_tokens from the caller
-        gen_params->SetSearchOption("max_length", std::min(context_size_, static_cast<int>(input_ids.size()) + params.max_length));
+        const int total_max_length = static_cast<int>(input_ids.size()) + max_new_tokens;
+        gen_params->SetSearchOption("max_length", total_max_length);
         gen_params->SetSearchOption("temperature", params.temperature);
         gen_params->SetSearchOption("top_p", params.top_p);
         gen_params->SetSearchOption("top_k", static_cast<double>(params.top_k));
@@ -518,6 +520,8 @@ std::string InferenceEngine::complete(const std::string& prompt, const Generatio
         // Return timing data if requested
         if (out_timing != nullptr) {
             out_timing->token_count = generated_token_count;
+            out_timing->prompt_token_count = static_cast<int>(input_ids.size());
+            out_timing->reached_limit = output_count >= static_cast<size_t>(total_max_length);
             out_timing->ttft_seconds = ttft_seconds;
             out_timing->tps = tps;
             out_timing->total_time_ms = total_time_ms;
@@ -552,9 +556,10 @@ std::string InferenceEngine::complete(const std::string& prompt, const Generatio
     }
 }
 
-bool InferenceEngine::streamComplete(const std::string& prompt, 
+bool InferenceEngine::streamComplete(const std::string& prompt,
                                      const GenerationParams& params,
-                                     StreamCallback callback) {
+                                     StreamCallback callback,
+                                     int* out_prompt_tokens) {
     std::lock_guard<std::mutex> lock(inference_mutex_);
     
     try {
@@ -566,15 +571,17 @@ bool InferenceEngine::streamComplete(const std::string& prompt,
         const int32_t* input_ids_ptr = sequences->SequenceData(0);
         size_t input_ids_count = sequences->SequenceCount(0);
         std::vector<int32_t> input_ids(input_ids_ptr, input_ids_ptr + input_ids_count);
-        input_ids = truncatePrompt(input_ids);
+        const int max_new_tokens = std::clamp(params.max_length, 1, context_size_ - 1);
+        input_ids = truncatePrompt(input_ids, max_new_tokens);
+        if (out_prompt_tokens != nullptr) {
+            *out_prompt_tokens = static_cast<int>(input_ids.size());
+        }
         
         // Create generator params
         auto gen_params = OgaGeneratorParams::Create(*model_);
-        // max_length should be prompt_length + max_new_tokens
-        // params.max_length is max_new_tokens from the caller
-        int total_max_length = std::min(context_size_, static_cast<int>(input_ids.size()) + params.max_length);
+        const int total_max_length = static_cast<int>(input_ids.size()) + max_new_tokens;
         std::cout << "[InferenceEngine::streamComplete] prompt_length=" << input_ids.size() 
-                  << ", max_new_tokens=" << params.max_length 
+                  << ", max_new_tokens=" << max_new_tokens
                   << ", total_max_length=" << total_max_length << std::endl;
         gen_params->SetSearchOption("max_length", total_max_length);
         gen_params->SetSearchOption("temperature", params.temperature);
@@ -654,7 +661,8 @@ bool InferenceEngine::streamComplete(const std::string& prompt,
         }
         
         std::cout << "[InferenceEngine] Generated " << token_count << " tokens (streaming)" << std::endl;
-        return generator->GetSequenceCount(0) - input_ids.size() >= static_cast<size_t>(params.max_length);
+        return !client_disconnected &&
+               generator->GetSequenceCount(0) >= static_cast<size_t>(total_max_length);
         
     } catch (const std::exception& e) {
         throw std::runtime_error("Streaming inference failed: " + std::string(e.what()));
